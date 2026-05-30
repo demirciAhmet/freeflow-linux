@@ -60,6 +60,7 @@ DEFAULT_CONFIG = """\
 # freeflow-linux configuration
 api_key = ""            # Groq API key (or set GROQ_API_KEY env var)
 hotkey = "KEY_RIGHTCTRL"  # Right Ctrl — change to KEY_F9 etc. if preferred
+# stream_mode = "ondemand"  # "ondemand" (mic off when idle) or "persistent" (always-on stream)
 # audio_device = ""    # Leave empty to use system default mic
 """
 
@@ -77,6 +78,9 @@ Output rules:
 - If the transcription is empty, return exactly: EMPTY
 - Do not add words, names, or content that are not in the transcription. The context is only for correcting spelling of words already spoken.
 - Do not change the meaning of what was said."""
+
+SKIP_POST_PROCESSING = True  # set to True to skip LLM post-processing by default
+STREAM_MODE_DEFAULT = "ondemand"  # "ondemand" (mic off when idle) or "persistent" (always-on stream)
 
 
 def load_config() -> dict:
@@ -97,6 +101,13 @@ def load_config() -> dict:
     cfg.setdefault("hotkey", "KEY_RIGHTCTRL")
     cfg.setdefault("audio_device", None)
     cfg.setdefault("api_base_url", "")
+
+    # Stream mode validation
+    stream_mode = cfg.get("stream_mode", STREAM_MODE_DEFAULT).strip().lower()
+    if stream_mode not in ("ondemand", "persistent"):
+        print(f"[freeflow] WARNING: Unknown stream_mode '{stream_mode}', falling back to '{STREAM_MODE_DEFAULT}'")
+        stream_mode = STREAM_MODE_DEFAULT
+    cfg["stream_mode"] = stream_mode
 
     return cfg
 
@@ -203,14 +214,38 @@ def paste_text(text: str, session: str):
 # Audio recording
 # ---------------------------------------------------------------------------
 
-def play_beep(frequency=880, duration=0.1, volume=0.3):
-    """Play a short beep to signal readiness or state change."""
+SOUNDS_DIR = Path(__file__).resolve().parent / "sounds"
+
+
+def play_sound(name: str):
+    """Play a WAV file from the sounds/ directory via pw-play.
+
+    Uses pw-play for minimal latency on PipeWire systems (Zorin/GNOME).
+    Falls back silently if the file doesn't exist or pw-play is missing.
+    """
+    wav = SOUNDS_DIR / f"{name}.wav"
+    if not wav.exists():
+        return
     try:
-        t = np.linspace(0, duration, int(16000 * duration), False)
-        tone = (np.sin(2 * np.pi * frequency * t) * volume * 32767).astype(np.int16)
-        sd.play(tone, samplerate=16000, blocking=True)
+        subprocess.run(
+            ["pw-play", str(wav)],
+            capture_output=True,
+            timeout=5,
+        )
     except Exception:
-        pass  # never crash on beep failure
+        pass  # never crash on sound failure
+
+
+def _get_pipewire_device() -> int | None:
+    """Return PipeWire device index if available, else None."""
+    try:
+        devices = sd.query_devices()
+        for i in range(len(devices)):
+            if devices[i]["name"] == "pipewire":
+                return i
+    except Exception:
+        pass
+    return None
 
 
 class AudioRecorder:
@@ -218,35 +253,73 @@ class AudioRecorder:
     CHANNELS = 1
     DTYPE = "int16"
 
-    def __init__(self, device=None):
+    def __init__(self, device=None, stream_mode="ondemand"):
         self._device = device
         self._frames: list = []
         self._recording = False
         self._stream = None
+        self._stream_mode = stream_mode
 
-    def start_stream(self):
-        """Call once at daemon startup — keeps stream warm to eliminate startup latency."""
-        def callback(indata, frame_count, time_info, status):
-            if self._recording:
-                self._frames.append(indata.copy())
+    def _validate_device(self, device):
+        """Check that a device supports our sample rate, return valid device index."""
+        try:
+            sd.check_input_settings(
+                device=device, samplerate=self.SAMPLE_RATE,
+                channels=self.CHANNELS, dtype=self.DTYPE
+            )
+            return device
+        except Exception:
+            pw = _get_pipewire_device()
+            if pw is not None:
+                print(f"[freeflow] Device doesn't support {self.SAMPLE_RATE} Hz, using PipeWire (device {pw})")
+                return pw
+            raise
 
+    def _open_stream(self):
+        """Create and start the InputStream."""
+        device = self._validate_device(self._device)
         self._stream = sd.InputStream(
             samplerate=self.SAMPLE_RATE,
             channels=self.CHANNELS,
             dtype=self.DTYPE,
-            device=self._device,
-            callback=callback,
+            device=device,
+            callback=self._callback,
         )
         self._stream.start()
 
+    def _close_stream(self):
+        """Stop and close the InputStream."""
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+
+    def _callback(self, indata, frame_count, time_info, status):
+        """Internal callback — store frames only when recording."""
+        if self._recording:
+            self._frames.append(indata.copy())
+
+    def start_stream(self):
+        """Call once at daemon startup for persistent mode — keeps stream warm."""
+        if self._stream_mode == "persistent":
+            self._open_stream()
+
     def start_recording(self):
-        """Called on key_down — zero latency since stream is already open."""
+        """Called when the hold threshold is reached."""
         self._frames = []
+        if self._stream_mode == "ondemand":
+            self._open_stream()
         self._recording = True
 
     def stop_recording(self) -> io.BytesIO:
         """Called on key_up — stop collecting and return WAV buffer."""
         self._recording = False
+
+        if self._stream_mode == "ondemand":
+            self._close_stream()
 
         if not self._frames:
             return io.BytesIO()
@@ -265,7 +338,8 @@ class AudioRecorder:
 
 def transcribe(client: Groq, audio_buf: io.BytesIO) -> str:
     result = client.audio.transcriptions.create(
-        model="whisper-large-v3",
+        model="whisper-large-v3-turbo",
+        language="en",
         file=audio_buf,
     )
     return result.text.strip()
@@ -355,7 +429,10 @@ class FreeflowDaemon:
         if cfg.get("api_base_url"):
             groq_kwargs["base_url"] = cfg["api_base_url"]
         self._client = Groq(**groq_kwargs)
-        self._recorder = AudioRecorder(device=cfg.get("audio_device") or None)
+        self._recorder = AudioRecorder(
+            device=cfg.get("audio_device") or None,
+            stream_mode=cfg.get("stream_mode", "ondemand"),
+        )
         self._hotkey_code = resolve_hotkey(cfg["hotkey"])
         self._session = get_session_type()
         self._recording = False
@@ -369,7 +446,8 @@ class FreeflowDaemon:
                 return  # cancelled by key_up
             self._pending_timer = None
             self._recording = True
-        play_beep(frequency=440, duration=0.08, volume=0.2)  # beep = recording started
+        subprocess.Popen(["notify-send", "-t", "1000", "-i", "audio-input-microphone", "FreeFlow", "Recording..."])
+        play_sound("start_voice")
         print("[freeflow] Recording... (release key to transcribe)")
         self._recorder.start_recording()
 
@@ -392,6 +470,7 @@ class FreeflowDaemon:
                 return
             self._recording = False
 
+        play_sound("stop_voice")
         print("[freeflow] Processing...")
         audio_buf = self._recorder.stop_recording()
 
@@ -404,15 +483,23 @@ class FreeflowDaemon:
                 return
             print(f"[freeflow] Raw transcript: {raw!r}")
 
-            cleaned = post_process(self._client, raw, context)
-            if not cleaned:
-                print("[freeflow] Post-processor returned EMPTY — nothing to paste")
-                return
-            print(f"[freeflow] Cleaned: {cleaned!r}")
+            if SKIP_POST_PROCESSING := True:
+                cleaned = raw
+                print("[freeflow] Skipping post-processing (SKIP_POST_PROCESSING=True) — using raw transcript")
+            else:
+                cleaned = post_process(self._client, raw, context)
+                if not cleaned:
+                    print("[freeflow] Post-processor returned EMPTY — nothing to paste")
+                    return
+                print(f"[freeflow] Cleaned: {cleaned!r}")
 
-            paste_text(cleaned, self._session)
-            print("[freeflow] Pasted.")
-
+            subprocess.run(["wl-copy", "--", cleaned], check=True)
+            subprocess.Popen(["notify-send", "-t", "1000", "-i", "edit-paste", "FreeFlow", "Transcription ready in clipboard"])
+            print("[freeflow] Copied to clipboard.")
+            # paste_text(cleaned, self._session)
+            print("[freeflow] Pasting skipped for now.")
+            print("[freeflow] fix the ydotool paste command in freeflow_linux.py and uncomment paste_text() to enable pasting.")
+            
         except Exception as e:
             print(f"[freeflow] Error: {e}")
 
@@ -437,10 +524,11 @@ class FreeflowDaemon:
         print(f"[freeflow] Monitoring {len(devices)} keyboard device(s)")
         print(f"[freeflow] Hotkey: {self._cfg['hotkey']}")
         print(f"[freeflow] Session: {self._session}")
+        print(f"[freeflow] Stream mode: {self._recorder._stream_mode}")
 
         self._recorder.start_stream()
-        play_beep(frequency=880, duration=0.1, volume=0.3)  # startup ready beep
-        print(f"[freeflow] Ready — hold {self._cfg['hotkey']} to dictate")
+        print(f"[freeflow] Ready, hold {self._cfg['hotkey']} to dictate")
+        subprocess.Popen(["notify-send", "-t", "2000", "-i", "microphone-sensitivity-low", "FreeFlow", "Ready, hold Right Ctrl to dictate"])
 
         await asyncio.gather(*[self._monitor_device(dev) for dev in devices])
 

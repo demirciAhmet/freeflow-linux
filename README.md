@@ -102,6 +102,20 @@ hotkey = "KEY_RIGHTCTRL"     # Right Ctrl — change to KEY_F9 etc. if preferred
 
 To find available hotkey names, run `evtest` and press the key you want.
 
+### Stream mode: on-demand vs persistent
+
+The `stream_mode` setting controls whether the audio stream stays open at all times:
+
+- **`ondemand`** (default): Mic is opened only when you hold the hotkey past the 1s threshold, and closed after transcription. CPU usage at idle is ~0%. Privacy benefit: the mic hardware is electrically inactive when you're not dictating. Adds ~100ms of stream-init latency on first utterance.
+- **`persistent`**: Audio stream runs continuously, the callback discards samples when not recording. Instant recording start. Idle CPU is ~3% (PortAudio poll loop). Mic hardware stays active while the daemon runs.
+
+Example config:
+```toml
+stream_mode = "ondemand"     # or "persistent"
+```
+
+You can also comment/uncomment the option in `~/.config/freeflow-linux/config.toml`.
+
 ## Autostart (systemd user service)
 
 ```bash
