@@ -1,5 +1,8 @@
 # freeflow-linux
 
+> **Fork of [wolfgangmeyers/freeflow-linux](https://github.com/wolfgangmeyers/freeflow-linux)** (originally a Linux port of [FreeFlow](https://github.com/zachlatta/freeflow) by Zach Latta).
+> This fork adds on-demand mic streaming (privacy / zero-idle-CPU), WAV-based sound effects, and configurable stream modes.
+
 Push-to-talk voice dictation for Linux using Groq Whisper + LLM post-processing.
 
 A Linux equivalent of [FreeFlow](https://github.com/zachlatta/freeflow) (macOS). Hold a
@@ -177,5 +180,6 @@ WantedBy=default.target
 
 ## Credits
 
-Inspired by [FreeFlow](https://github.com/zachlatta/freeflow) by Zach Latta.
+Inspired by [FreeFlow](https://github.com/zachlatta/freeflow) by Zach Latta.  
+This is a fork of [wolfgangmeyers/freeflow-linux](https://github.com/wolfgangmeyers/freeflow-linux) (the initial Linux port).  
 Uses [Groq](https://groq.com/) for fast Whisper transcription and LLM post-processing.
