@@ -54,3 +54,4 @@ Currently copying to clipboard without pasting (paste commented out until ydotoo
 - stream opened on-demand by default for privacy/CPU — was persistent before, changed May 2026
 - Post-processing LLM disabled by default (raw transcription is good enough, and saves API cost)
 - Context-gathering (active window title) is X11-only; Wayland has no equivalent API
+- Sound effects are WAV files in `sounds/`, played via `pw-play` subprocess — no Python audio processing for beeps

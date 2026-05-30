@@ -102,7 +102,7 @@ hotkey = "KEY_RIGHTCTRL"     # Right Ctrl — change to KEY_F9 etc. if preferred
 
 To find available hotkey names, run `evtest` and press the key you want.
 
-### Stream mode: on-demand vs persistent
+## Stream mode: on-demand vs persistent
 
 The `stream_mode` setting controls whether the audio stream stays open at all times:
 
@@ -115,6 +115,22 @@ stream_mode = "ondemand"     # or "persistent"
 ```
 
 You can also comment/uncomment the option in `~/.config/freeflow-linux/config.toml`.
+
+## Sound effects
+
+freeflow-linux plays a sound when recording starts and when it finishes. WAV files are stored in `sounds/` next to the script, played via `pw-play` (PipeWire).
+
+Includes two sets:
+- **Bird** — rising chirp on start, falling chirp on stop (`start_voice_bird.wav`, `stop_voice_bird.wav`)
+- **macOS-style** — bright ascending pings on start, glassy descending sweep on stop (`start_macos.wav`, `stop_macos.wav`)
+
+Swap between them by copying the file you want over the active name:
+```bash
+cp sounds/start_macos.wav sounds/start_voice.wav
+cp sounds/stop_macos.wav sounds/stop_voice.wav
+```
+
+Drop any WAV file (48kHz, mono or stereo) into `sounds/start_voice.wav` or `sounds/stop_voice.wav` to use your own.
 
 ## Autostart (systemd user service)
 
