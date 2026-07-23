@@ -1,7 +1,7 @@
 # freeflow-linux
 
 > **Fork of [wolfgangmeyers/freeflow-linux](https://github.com/wolfgangmeyers/freeflow-linux)** (originally a Linux port of [FreeFlow](https://github.com/zachlatta/freeflow) by Zach Latta).
-> This fork adds on-demand mic streaming (privacy / zero-idle-CPU), WAV-based sound effects, and configurable stream modes.
+> This fork adds on-demand mic streaming (privacy / zero-idle-CPU), WAV-based sound effects, configurable stream modes, and a direct-typing Wayland paste fix.
 
 Push-to-talk voice dictation for Linux using Groq Whisper + LLM post-processing.
 
@@ -13,7 +13,7 @@ by Groq Whisper and cleaned up by a Groq LLM, then pasted into whatever app you 
 
 1. Hold the hotkey for 1 second (a beep confirms recording has started)
 2. Speak
-3. Release the hotkey — the transcript is cleaned up and pasted into the focused window
+3. Release the hotkey — the transcript is cleaned up and inserted into the focused window (xdotool on X11, direct `wtype` typing on Wayland)
 
 The 1-second hold threshold prevents accidental triggers.
 
@@ -140,28 +140,21 @@ Drop any WAV file (48kHz, mono or stereo) into `sounds/start_voice.wav` or `soun
 ```bash
 mkdir -p ~/.config/systemd/user
 cp freeflow-linux.service.example ~/.config/systemd/user/freeflow-linux.service
-# Edit the ExecStart path if needed
+# Edit the ExecStart path and environment variables for your setup
 systemctl --user daemon-reload
 systemctl --user enable --now freeflow-linux
 ```
 
-Example service file:
+The example service file ships with Wayland defaults (commented X11 block included). Adjust
+`WAYLAND_DISPLAY`, `XDG_CURRENT_DESKTOP`, and `XDG_RUNTIME_DIR` to match your session —
+run `echo $WAYLAND_DISPLAY $XDG_CURRENT_DESKTOP` in a terminal to check.
 
-```ini
-[Unit]
-Description=FreeFlow Linux voice dictation daemon
-After=graphical-session.target
+## Paste behavior on Wayland
 
-[Service]
-ExecStart=/path/to/freeflow-linux/.venv/bin/python /path/to/freeflow-linux/freeflow_linux.py
-Restart=on-failure
-RestartSec=3
-Environment=XDG_SESSION_TYPE=x11
-Environment=DISPLAY=:0
-
-[Install]
-WantedBy=default.target
-```
+On Wayland (wlroots/KDE), the transcript is typed directly into the focused window via
+`wtype <text>` instead of simulating Ctrl+V. This avoids race conditions with clipboard
+managers (clipse, cliphist) where Ctrl+V may paste a stale clipboard entry instead of the
+new transcription. The text is still copied to the clipboard as a backup.
 
 ## Hotkey compatibility notes
 
@@ -174,9 +167,9 @@ WantedBy=default.target
 | Feature | X11 | Wayland |
 |---|---|---|
 | Hotkey capture (evdev) | Yes | Yes |
-| Paste | xclip + xdotool | wl-copy + wtype/ydotool |
+| Paste | xclip + xdotool | wl-copy + wtype (direct typing) / ydotool |
 | Window context | Yes (xdotool) | No |
-| Terminal detection (Ctrl+Shift+V) | Yes | No |
+| Terminal detection (Ctrl+Shift+V) | Yes | N/A (direct typing, no Ctrl+V needed) |
 
 ## Credits
 
