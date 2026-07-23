@@ -1,6 +1,7 @@
 [Unit]
 Description=FreeFlow Linux voice dictation daemon
-After=graphical-session.target
+After=graphical-session.target pipewire.service pipewire-pulse.service wireplumber.service
+Wants=pipewire.service pipewire-pulse.service
 PartOf=graphical-session.target
 
 [Service]
